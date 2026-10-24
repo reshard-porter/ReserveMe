@@ -1,0 +1,70 @@
+name: Build installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: rm_test
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: rm_test
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -ptest" --health-interval 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements-dev.txt
+      - name: Unit tests on SQLite, PostgreSQL and MySQL
+        env:
+          RM_TEST_PG_URL: postgresql+psycopg://postgres:test@localhost:5432/rm_test
+          RM_TEST_MYSQL_URL: mysql+pymysql://root:test@127.0.0.1:3306/rm_test
+        run: python -m pytest -q tests
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: choco install innosetup -y --no-progress
+      - run: packaging\build_windows.bat
+        shell: cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReserveMe-Windows
+          path: dist/installer/*.exe
+
+  macos:
+    needs: test
+    strategy:
+      matrix:
+        runner: [macos-15, macos-15-intel]   # Apple silicon and Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      # To sign and notarize, add repository secrets and import the certificate here
+      # (see README, "Signing for real deployment").
+      - run: bash packaging/build_macos.sh
+        env:
+          PYTHON: python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReserveMe-macOS-${{ matrix.runner }}
+          path: dist/*.dmg
